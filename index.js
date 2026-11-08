@@ -81,7 +81,7 @@ async function main() {
 
     // Load dialogs so Telegram can resolve numeric group IDs from the existing TELEGRAM_CHAT_ID setting.
     await telegramClient.getDialogs({ limit: 500 });
-    const chatRef = /^-?\\d+$/.test(String(TELEGRAM_CHAT_ID)) ? Number(TELEGRAM_CHAT_ID) : TELEGRAM_CHAT_ID;
+    const chatRef = /^-?\d+$/.test(String(TELEGRAM_CHAT_ID)) ? Number(TELEGRAM_CHAT_ID) : TELEGRAM_CHAT_ID;
     if (typeof chatRef === 'number' && !Number.isSafeInteger(chatRef)) {
       throw new Error('TELEGRAM_CHAT_ID is outside the safe integer range. Use the group username (for example @groupname) instead.');
     }
