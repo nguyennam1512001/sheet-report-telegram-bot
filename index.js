@@ -126,18 +126,24 @@ async function main() {
       if (!sheetInfo) { console.log(`⚠️ Sheet "${sheetName}" not found — skipping`); continue; }
       const gid = sheetInfo.properties.sheetId;
 
-      // Lấy F5:K6
+      // Lấy F5:I6
       const rangeRes = await sheetsApi.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${sheetName}!F5:K6`
+        range: `${sheetName}!F5:I6`
       });
+
       const values = rangeRes.data.values || [];
       const f5 = values[0]?.[0] || '';
-      const j5 = values[0]?.[4] || '';
-      const k5 = values[0]?.[5] || '';
-      const k6 = values[1]?.[5] || '';
-      if (!k6) { console.log(`⚠️ Sheet "${sheetName}" K6 trống — bỏ qua`); continue; }
-      const captionText = `${f5}    ${j5}    ${k5}`;
+      const h5 = values[0]?.[2] || '';
+      const i5 = values[0]?.[3] || '';
+      const i6 = values[1]?.[3] || '';
+
+      if (!i6) {
+        console.log(`⚠️ Sheet "${sheetName}" I6 trống — bỏ qua`);
+        continue;
+      }
+
+      const captionText = `${f5}    ${h5}    ${i5}`;
 
       // Last row col K
       const colRes = await sheetsApi.spreadsheets.values.get({
