@@ -4,9 +4,10 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const axios = require('axios');
-const FormData = require('form-data');
 const { google } = require('googleapis');
 const sharp = require('sharp');
+const { TelegramClient } = require('teleproto');
+const { StringSession } = require('teleproto/sessions');
 
 // === chống Google 429: retry 5 lần ===
 async function fetchPdfWithRetry(url, headers, attempt = 1) {
@@ -48,6 +49,8 @@ function convertPdfToPng(pdfPath, outPrefix) {
   });
 }
 
+let telegramClient;
+
 async function main() {
   try {
     const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -56,12 +59,34 @@ async function main() {
     const START_COL = process.env.START_COL || 'F';
     const END_COL = process.env.END_COL || 'AD';
     const MAX_ROWS_PER_FILE = Number(process.env.MAX_ROWS_PER_FILE || '40');
-    const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+    const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID);
+    const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH;
+    const TELEGRAM_SESSION = process.env.TELEGRAM_SESSION;
     const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-    if (!serviceAccountJson || !SPREADSHEET_ID || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-      throw new Error('Missing required environment variables');
+    if (!serviceAccountJson || !SPREADSHEET_ID || !TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION || !TELEGRAM_CHAT_ID) {
+      throw new Error('Missing required environment variables. Required: GOOGLE_SERVICE_ACCOUNT_JSON, SPREADSHEET_ID, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION, TELEGRAM_CHAT_ID');
     }
+
+    // === Connect using the personal Telegram account (saved StringSession) ===
+    telegramClient = new TelegramClient(
+      new StringSession(TELEGRAM_SESSION),
+      TELEGRAM_API_ID,
+      TELEGRAM_API_HASH,
+      { connectionRetries: 5 }
+    );
+    await telegramClient.connect();
+    const telegramMe = await telegramClient.getMe(); // also verifies that the saved session is authorized
+    console.log('✅ Telegram personal account connected:', telegramMe.username || telegramMe.firstName || 'authorized user');
+
+    // Load dialogs so Telegram can resolve numeric group IDs from the existing TELEGRAM_CHAT_ID setting.
+    await telegramClient.getDialogs({ limit: 500 });
+    const chatRef = /^-?\\d+$/.test(String(TELEGRAM_CHAT_ID)) ? Number(TELEGRAM_CHAT_ID) : TELEGRAM_CHAT_ID;
+    if (typeof chatRef === 'number' && !Number.isSafeInteger(chatRef)) {
+      throw new Error('TELEGRAM_CHAT_ID is outside the safe integer range. Use the group username (for example @groupname) instead.');
+    }
+    const telegramChat = await telegramClient.getEntity(chatRef);
+    console.log('📨 Telegram destination resolved');
 
     const creds = JSON.parse(serviceAccountJson);
 
@@ -186,25 +211,19 @@ async function main() {
         });
       }
 
-      // SEND ALBUM
-      console.log(`📤 Sending ALBUM for sheet ${sheetName}`);
-      const formAlbum = new FormData();
-      formAlbum.append('chat_id', TELEGRAM_CHAT_ID);
-
-      const media = albumImages.map((img, i) => ({
-        type: "photo",
-        media: `attach://${img.fileName}`,
-        caption: i === 0 ? captionText : undefined
-      }));
-      formAlbum.append('media', JSON.stringify(media));
-      albumImages.forEach(img => formAlbum.append(img.fileName, fs.createReadStream(img.path)));
-
-      const tgResp = await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup`,
-        formAlbum,
-        { headers: formAlbum.getHeaders() }
-      );
-      console.log('📸 Album result:', tgResp.data);
+      // SEND ALBUM through the personal Telegram account (MTProto)
+      console.log(`📤 Sending ${albumImages.length} image(s) for sheet ${sheetName}`);
+      // Telegram albums accept up to 10 media items per request.
+      for (let i = 0; i < albumImages.length; i += 10) {
+        const batch = albumImages.slice(i, i + 10);
+        const files = batch.map(img => img.path);
+        const caption = i === 0 ? captionText : '';
+        const sent = await telegramClient.sendFile(telegramChat, {
+          file: files.length === 1 ? files[0] : files,
+          caption
+        });
+        console.log(`📸 Sent batch ${Math.floor(i / 10) + 1}: ${Array.isArray(sent) ? sent.length : 1} message(s)`);
+      }
 
       // Cleanup
       albumImages.forEach(img => {
@@ -221,7 +240,13 @@ async function main() {
     console.log('🎉 All sheets processed successfully');
   } catch (err) {
     console.error('ERROR:', err?.message || err);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    if (telegramClient) {
+      try { await telegramClient.disconnect(); } catch (disconnectError) {
+        console.warn('Telegram disconnect warning:', disconnectError?.message || disconnectError);
+      }
+    }
   }
 }
 
